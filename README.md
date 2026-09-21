@@ -157,23 +157,44 @@ is damaged: `docker volume rm k3s-images` and rebuild, accepting the download.
 
 ## Round 3 · count the words with DataFrames, then with RDDs
 
-First fill the folder round 2 attached, then hand the cluster a file that does the
-two things `kubectl create` could not: give the pods that folder, and give the
-master a name in cluster DNS.
+Round 3 starts from nothing, so that the file below is demonstrably what built
+the cluster, and so that every group is measuring the same thing.
 
 ```bash
+docker rm -f k8s
+rm -rf lab kube && mkdir lab kube          # sudo rm -rf if Docker made one as root
 git clone https://github.com/oesteban/isc-302-2026-2027-spark-lab lab
 unzip ~/Downloads/20news.zip -d lab/data
-ls lab/data/20news | wc -l                                        # 18846
+ls lab/data/20news | wc -l                 # 18846
 
-kubectl apply -f https://raw.githubusercontent.com/oesteban/isc-302-2026-2027-spark-lab/main/spark-standalone.yaml
-kubectl exec deploy/spark-worker -- ls /lab/data/20news | wc -l    # 18846, from inside
+# the cluster again: round 2's command, unchanged
+docker run -d --name k8s --privileged --tmpfs /run --tmpfs /var/run \
+  -p 6443:6443 -v "$PWD/kube:/output" -v "$PWD/lab:/lab" \
+  -v k3s-images:/var/lib/rancher/k3s/agent/containerd \
+  rancher/k3s:v1.36.4-k3s1 server --disable=traefik \
+  --write-kubeconfig /output/config --write-kubeconfig-mode 644
+
+# a client, this time with the manifest file mounted into it
+docker run --rm -it --network container:k8s \
+  -v "$PWD/kube:/kube:ro" \
+  -v "$PWD/lab/spark-standalone.yaml:/spark-standalone.yaml:ro" \
+  -e KUBECONFIG=/kube/config --entrypoint sh alpine/kubectl
+```
+
+Then, in that shell, read the manifest before applying it. It is the same Service
+and two Deployments round 2 typed, plus the two things `kubectl create` has no
+option for: a `hostPath` volume so the pods can see `/lab`, and a `hostname` so
+cluster DNS answers for the master.
+
+```bash
+cat /spark-standalone.yaml
+kubectl apply -f /spark-standalone.yaml
+kubectl get pods
 kubectl scale deployment spark-worker --replicas=4
 ```
 
-It warns that the objects were made by hand and it has nothing to compare
-against. That is true, harmless, and it patches them anyway. From here on
-`--conf spark.driver.host` is not needed.
+The pods are up in seconds: the image stayed in the named volume when round 2's
+cluster was deleted.
 
 Two scripts. Same data, same answer, different machinery. Both are submitted to
 the cluster round 2 built, so the partition counts and the clocks below are
