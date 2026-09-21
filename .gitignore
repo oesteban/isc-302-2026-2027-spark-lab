@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+spark-warehouse/
+derby.log
+metastore_db/
+kube/
+data/20news/

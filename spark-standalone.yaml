@@ -1,0 +1,76 @@
+# spark-standalone.yaml — one Spark master and N workers, on the cluster from µLab 1.
+#
+# Applied with:  kubectl apply -f spark-standalone.yaml
+#
+# The image is not pulled: it is imported into the cluster's own store first,
+# which is why imagePullPolicy is IfNotPresent. See the worksheet, panel 3.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: spark-master
+spec:
+  clusterIP: None              # headless: the name resolves to the pod itself
+  selector: { app: spark-master }
+  ports:
+    - { name: submit, port: 7077, targetPort: 7077 }
+    - { name: ui,     port: 8080, targetPort: 8080 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spark-master
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: spark-master }
+  template:
+    metadata:
+      labels: { app: spark-master }
+    spec:
+      hostname: spark-master
+      subdomain: spark-master
+      containers:
+        - name: spark
+          image: spark:3.5.4-python3
+          imagePullPolicy: IfNotPresent
+          command: ["/opt/spark/bin/spark-class"]
+          args: ["org.apache.spark.deploy.master.Master", "--host", "spark-master"]
+          ports:
+            - { containerPort: 7077 }
+            - { containerPort: 8080 }
+          volumeMounts:
+            - { name: lab, mountPath: /lab, readOnly: true }
+      volumes:
+        - name: lab
+          hostPath: { path: /lab, type: Directory }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spark-worker
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: spark-worker }
+  template:
+    metadata:
+      labels: { app: spark-worker }
+    spec:
+      containers:
+        - name: spark
+          image: spark:3.5.4-python3
+          imagePullPolicy: IfNotPresent
+          command: ["/opt/spark/bin/spark-class"]
+          args:
+            - org.apache.spark.deploy.worker.Worker
+            - spark://spark-master:7077
+            - --cores
+            - "1"
+            - --memory
+            - 1g
+          volumeMounts:
+            - { name: lab, mountPath: /lab, readOnly: true }
+      volumes:
+        - name: lab
+          hostPath: { path: /lab, type: Directory }
