@@ -16,7 +16,28 @@ through ISC Learn instead.
 
 ## Getting set up
 
-Before the session, download **`20news.zip`** (20 MB) from ISC Learn. Nothing else
+Before the session, download **`20news.zip`** (20 MB) from ISC Learn.
+
+**On macOS, check this first.** If your shell forces a platform, every container
+here is emulated instruction by instruction: the cluster starts, runs slowly, and
+then its runtime stops answering. Measured on an M-series Mac, forced to
+`linux/amd64` it died after about half an hour; native, the pods were up in 35 s.
+
+```bash
+echo "$DOCKER_DEFAULT_PLATFORM"      # must print an empty line
+```
+
+If it prints `linux/amd64`, delete that line from whichever file sets it and
+clear it from the running shell as well:
+
+```bash
+grep -rn DOCKER_DEFAULT_PLATFORM ~/.zshrc ~/.zprofile ~/.bash_profile ~/.bashrc
+unset DOCKER_DEFAULT_PLATFORM
+docker rmi -f rancher/k3s:v1.36.4-k3s1 alpine/kubectl
+```
+
+All three images this lab uses publish an Apple Silicon build, so nothing needs
+emulating. Nothing else
 is needed in advance: round 2 clones nothing, and round 3 clones this repository
 in one second because the corpus is not in it.
 
@@ -37,6 +58,7 @@ mkdir lab
 docker rm -f k8s
 docker run -d --name k8s --privileged --tmpfs /run --tmpfs /var/run \
   -p 6443:6443 -v "$PWD/kube:/output" -v "$PWD/lab:/lab" \
+  -v k3s-images:/var/lib/rancher/k3s/agent/containerd \
   rancher/k3s:v1.36.4-k3s1 server --disable=traefik \
   --write-kubeconfig /output/config --write-kubeconfig-mode 644
 
@@ -95,6 +117,41 @@ kubectl exec deploy/spark-master -- /opt/spark/bin/spark-submit \
 
 docker save spark:3.5.4-python3 | docker exec -i k8s ctr -n k8s.io images import -
 ```
+
+**Extension · say the same thing in a file.** Three commands built the cluster and
+recorded nothing. Tear them down and apply `spark-as-typed.yaml`, which describes
+exactly those three objects and nothing more.
+
+```bash
+kubectl delete deployment spark-master spark-worker
+kubectl delete service spark-master
+kubectl apply -f https://raw.githubusercontent.com/oesteban/isc-302-2026-2027-spark-lab/main/spark-as-typed.yaml
+```
+
+It comes back in seconds, because the image never left the cluster's store.
+
+---
+
+## When the cluster stops answering
+
+A laptop that sleeps takes its cluster's container runtime with it. The symptoms
+are `kubectl get nodes` reading `NotReady`, commands timing out, or pods stuck in
+`ContainerCreating`. Work down this list and stop at the first thing that helps.
+
+```bash
+docker restart k8s            # then LEAVE the kubectl shell and start a new one
+docker exec k8s crictl ps     # rows mean the runtime is back; a bare header does not
+kubectl delete pods --all     # clears pods wedged while it was down
+```
+
+Leaving the shell is not optional: the client joined the cluster container's
+network namespace, and restarting the cluster replaces it, so an old client
+reports `connection refused` for ever afterwards.
+
+If `crictl ps` prints only a header, or pods stay in `ContainerCreating` past a
+minute, rebuild: `docker rm -f k8s`, then round 2 again. With the image store on
+its named volume that is about 30 seconds. If even that fails, the store itself
+is damaged: `docker volume rm k3s-images` and rebuild, accepting the download.
 
 ---
 
@@ -172,7 +229,8 @@ cores Docker gives it. The **shape** will match everyone's.
 
 | path | what |
 |---|---|
-| `spark-standalone.yaml` | the round 2 objects plus the volume and the hostname; applied in round 3 |
+| `spark-as-typed.yaml` | the three objects round 2 creates by hand, written down |
+| `spark-standalone.yaml` | the same, plus the volume and the hostname; applied in round 3 |
 | `data/20news/` | **not in git**: unzip `20news.zip` from ISC Learn to here |
 | `data/stopwords.txt` | 203 stopwords: ordinary English, plus the mail header field names |
 | `wordcount_df.py` | the count with the DataFrame API, and `explain()` |

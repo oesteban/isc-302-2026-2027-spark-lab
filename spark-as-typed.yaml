@@ -1,0 +1,68 @@
+# spark-as-typed.yaml — the three objects µLab 2 creates by hand, written down.
+#
+# Nothing here is new. It is the same Service and the same two Deployments that
+# these three commands produce:
+#
+#   kubectl create service clusterip spark-master --clusterip="None" --tcp=7077:7077
+#   kubectl create deployment spark-master --image=spark:3.5.4-python3 \
+#     -- /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master --host spark-master
+#   kubectl create deployment spark-worker --image=spark:3.5.4-python3 --replicas=2 \
+#     -- /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker \
+#        spark://spark-master:7077 --cores 1 --memory 1g
+#
+# spark-standalone.yaml, applied in µLab 3, is this file plus the two things
+# kubectl create cannot express: a hostPath volume and a pod hostname.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: spark-master
+spec:
+  clusterIP: None
+  selector: { app: spark-master }
+  ports:
+    - { name: submit, port: 7077, targetPort: 7077 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spark-master
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: spark-master }
+  template:
+    metadata:
+      labels: { app: spark-master }
+    spec:
+      containers:
+        - name: spark
+          image: spark:3.5.4-python3
+          imagePullPolicy: IfNotPresent
+          command: ["/opt/spark/bin/spark-class"]
+          args: ["org.apache.spark.deploy.master.Master", "--host", "spark-master"]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spark-worker
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: spark-worker }
+  template:
+    metadata:
+      labels: { app: spark-worker }
+    spec:
+      containers:
+        - name: spark
+          image: spark:3.5.4-python3
+          imagePullPolicy: IfNotPresent
+          command: ["/opt/spark/bin/spark-class"]
+          args:
+            - org.apache.spark.deploy.worker.Worker
+            - spark://spark-master:7077
+            - --cores
+            - "1"
+            - --memory
+            - 1g
