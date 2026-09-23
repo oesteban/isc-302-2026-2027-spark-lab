@@ -1,10 +1,15 @@
 # 302 · Spark lab
 
-Two refereed rounds for **Monday 21 September 2026**, session 4 of the data
-pipelines block of HES-SO module *302 Data Computation*.
+Refereed rounds for **Monday 21 September 2026** and **Thursday 24 September
+2026**, sessions 4 and 5 of the data pipelines block of HES-SO module
+*302 Data Computation*.
 
-Round 2 puts Spark on the Kubernetes cluster built in round 1. Round 3 counts
-words on it, two ways, and then makes the same count slow on purpose.
+On 21.09, round 2 puts Spark on the Kubernetes cluster built in round 1, and
+round 3 counts words on it two ways, then makes the same count slow on purpose.
+
+On 24.09, rounds 1 and 2 run the same count over a corpus that arrives as **one
+compressed file** rather than 18 846 small ones, and measure what that does to
+the plan and to the clock.
 
 Nothing is installed. Everything runs inside the official Spark image, which is
 published for both `linux/amd64` and `linux/arm64`, so an Apple Silicon laptop
@@ -16,7 +21,13 @@ through ISC Learn instead.
 
 ## Getting set up
 
-Before the session, download **`20news.zip`** (20 MB) from ISC Learn.
+Before the 21.09 session, download **`20news.zip`** (20 MB) from ISC Learn.
+
+Before the 24.09 session, download **`simplewiki.txt.bz2`** (76 MB) from ISC
+Learn as well, and put it in `lab/data/`. It is 212 354 Simple English Wikipedia
+articles, one per line, 259 MB of text once decompressed. It is a derivative of
+the 2026-09-01 dump, produced by `wiki_to_text.py` in this repository, so the
+step that made it is auditable rather than magic.
 
 **On macOS, check this first.** If your shell forces a platform, every container
 here is emulated instruction by instruction: the cluster starts, runs slowly, and
@@ -246,6 +257,136 @@ cores Docker gives it. The **shape** will match everyone's.
 
 ---
 
+## 24 September · round 1 · the same text, stored two ways
+
+Three runs of one unchanged script. The first is Monday's, repeated. The second
+reads the same text glued into a single compressed file. The third reads eight
+times as much text, stored the same way.
+
+On your laptop:
+
+```bash
+docker start k8s                                   # the container was stopped, not deleted
+cp ~/Downloads/simplewiki.txt.bz2 lab/data/
+```
+
+Then open a kubectl client exactly as round 1 of 21.09 does (`µLab 1, panel 1 ·
+Start the cluster, then get a client`). Everything marked *client* below is typed
+in that shell.
+
+```bash
+# client: one worker, then Monday's count, unchanged
+kubectl scale deployment spark-worker --replicas=1
+kubectl exec deploy/spark-master -- \
+  /opt/spark/bin/spark-submit --master spark://spark-master:7077 \
+  /lab/wordcount_df.py /lab/data '/lab/data/20news/*.txt'
+```
+
+The first argument is the folder holding `stopwords.txt`; the second is what gets
+read.
+
+```bash
+# laptop: the same 18 846 messages, as one file. Takes about three seconds.
+cd lab/data && find 20news -name '*.txt' -exec cat {} + | bzip2 > 20news.txt.bz2 && cd ../..
+```
+
+```bash
+# client: the same count again, reading that file
+kubectl exec deploy/spark-master -- \
+  /opt/spark/bin/spark-submit --master spark://spark-master:7077 \
+  /lab/wordcount_df.py /lab/data /lab/data/20news.txt.bz2
+
+# client: and once more, on eight times the text
+kubectl exec deploy/spark-master -- \
+  /opt/spark/bin/spark-submit --master spark://spark-master:7077 \
+  /lab/wordcount_df.py /lab/data /lab/data/simplewiki.txt.bz2
+```
+
+**Done when** three runs and six numbers are on your sheet.
+
+**Three things to write down.** The input partition count and the clock for each
+run, and whether the fifteen words changed between the first two. Then: run
+`ls /lab/data` from the shell you typed the command in. It does not exist there,
+and the run works without the quotes anyway. Say why the quotes matter even so.
+
+> Observed 2026-09-23, one worker:
+>
+> | run | text | input partitions | elapsed |
+> |---|--:|--:|--:|
+> | 18 846 files | 32.7 MB | 589 | 23.0 s |
+> | the same text, one `.bz2` | 32.7 MB | 2 | 4.7 s |
+> | Wikipedia, one `.bz2` | 260 MB | 2 | 27.9 s |
+>
+> The first two returned the same fifteen words with the same counts, to the
+> digit. Only the packaging differed, and it cost five times the clock.
+
+**Extensions.** Edit the script: drop the length filter, raise `TOP_N`, add a
+stopword. Then find out why 589 is neither 18 846 nor 1, with
+`--conf spark.sql.files.openCostInBytes=1048576` (589 becomes 148), and move that
+setting out of the command line and into `SparkSession.builder`.
+
+---
+
+## 24 September · round 2 · one worker, then four
+
+One thing changes: the number of workers. Four times the cores should be four
+times the speed if the work divides cleanly.
+
+In the same kubectl client:
+
+```bash
+kubectl scale deployment spark-worker --replicas=4
+kubectl get pods                                   # wait for four, all Running
+# then the identical submission from round 1
+```
+
+**Done when** two clocks, their ratio, and the name of the stage that refused to
+parallelise are on your sheet.
+
+> Observed 2026-09-23 on a ten-core laptop, each worker given one core:
+>
+> | input | workers | input partitions | elapsed |
+> |---|--:|--:|--:|
+> | `.bz2` | 1 | 2 | 27.9 s |
+> | `.bz2` | 4 | 4 | 14.1 s |
+> | plain `.txt` | 1 | 3 | 11.6 s |
+> | plain `.txt` | 4 | 4 | 8.9 s |
+>
+> Four times the workers bought a factor of two. Dropping the compression bought
+> almost as much again, for 260 MB of disk.
+
+**Extension.** `bzcat lab/data/simplewiki.txt.bz2 > lab/data/simplewiki.txt`, then
+run at four workers and at one. Which bought more: the workers or the format?
+
+---
+
+## 24 September · round 3 · deploy Flyte and run a pipeline
+
+The workflow is `hello.py`, in this repository, so the clone you already have is
+all you need. Everything else is on
+`week2/day2/handouts/ulab3-driver-worksheet.pdf`. It needs port 6443, which the
+Spark cluster is holding, so the round opens with `docker stop k8s`.
+
+```bash
+docker stop k8s
+flytectl demo start                               # answer n if it offers to delete
+export FLYTECTL_CONFIG=~/.flyte/config-sandbox.yaml
+
+cd lab
+uv run --python 3.12 --with flytekit==1.16.28 \
+  pyflyte run --remote hello.py count_words --sentence "the quick brown fox jumps"
+```
+
+**Done when** the console at <http://localhost:30080/console> shows one execution
+of `count_words` in phase SUCCEEDED, with two tasks.
+
+> Observed 2026-09-23: flytectl v0.9.8, Flyte sandbox v1.16.8, flytekit 1.16.28.
+> A warm start took 110 s; the execution succeeded in 36.8 s. With
+> `cache=True, cache_version="1.0"` on both tasks and unchanged inputs, a later
+> run succeeded in **0.085 s and created no pods at all**.
+
+---
+
 ## What is in here
 
 | path | what |
@@ -257,6 +398,9 @@ cores Docker gives it. The **shape** will match everyone's.
 | `wordcount_df.py` | the count with the DataFrame API, and `explain()` |
 | `wordcount_rdd.py` | the same count with RDDs, and `toDebugString()` |
 | `slowdown.py` | the partition and parallelism experiment |
+| `data/simplewiki.txt.bz2` | **not in git**: download from ISC Learn for 24.09 |
+| `wiki_to_text.py` | turns a MediaWiki XML dump into the one-article-per-line file above |
+| `hello.py` | the two-task Flyte workflow of 24.09 round 3 |
 
 `make check` runs both counts **on your laptop**, without the cluster, and asserts
 they agree. It needs `data/20news` to be unzipped first. It takes several minutes,

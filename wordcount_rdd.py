@@ -15,6 +15,7 @@ from pathlib import Path
 from pyspark.sql import SparkSession
 
 DATA = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("data")
+INPUT = sys.argv[2] if len(sys.argv) > 2 else str(DATA / "20news" / "*.txt")
 TOP_N = 15
 SPLIT = re.compile(r"\W+")
 
@@ -30,7 +31,7 @@ sc.setLogLevel("WARN")
 
 bc_stop = sc.broadcast(stopwords)
 
-lines = sc.textFile(str(DATA / "20news" / "*.txt"))
+lines = sc.textFile(INPUT)
 
 counts = (
     lines.flatMap(lambda line: SPLIT.split(line.lower()))
